@@ -4,8 +4,6 @@
 #nullable disable
 
 using osu.Framework.Allocation;
-using osu.Framework.Audio;
-using osu.Framework.Bindables;
 using osu.Framework.Extensions.Color4Extensions;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
@@ -21,7 +19,14 @@ namespace osu.Game.Overlays.Toolbar
 {
     public partial class ToolbarMusicButton : ToolbarOverlayToggleButton
     {
-        private Box volumeBar;
+        [Resolved]
+        private MusicController musicController { get; set; } = null!;
+
+        private Box seekBar;
+
+        private Container seekDisplay;
+
+        private bool blockSeek = false;
 
         protected override Anchor TooltipAnchor => Anchor.TopRight;
 
@@ -37,7 +42,7 @@ namespace osu.Game.Overlays.Toolbar
             StateContainer = music;
 
             Flow.Padding = new MarginPadding { Horizontal = Toolbar.HEIGHT / 4 };
-            Flow.Add(volumeDisplay = new CircularContainer
+            Flow.Add(seekDisplay = new CircularContainer
             {
                 Anchor = Anchor.CentreLeft,
                 Origin = Anchor.CentreLeft,
@@ -52,7 +57,7 @@ namespace osu.Game.Overlays.Toolbar
                         RelativeSizeAxes = Axes.Both,
                         Colour = Color4.White.Opacity(0.25f),
                     },
-                    volumeBar = new Box
+                    seekBar = new Box
                     {
                         RelativeSizeAxes = Axes.Both,
                         Height = 0f,
@@ -64,21 +69,16 @@ namespace osu.Game.Overlays.Toolbar
             });
         }
 
-        [Resolved]
-        private AudioManager audio { get; set; }
-
-        [Resolved(canBeNull: true)]
-        private VolumeOverlay volume { get; set; }
-
-        private IBindable<double> globalVolume;
-        private Container volumeDisplay;
-
         protected override void LoadComplete()
         {
             base.LoadComplete();
+        }
 
-            globalVolume = audio.Volume.GetBoundCopy();
-            globalVolume.BindValueChanged(v => volumeBar.ResizeHeightTo((float)v.NewValue, 200, Easing.OutQuint), true);
+        protected override void Update()
+        {
+            base.Update();
+            var track = musicController.CurrentTrack;
+            seekBar.Height = (float)(track.CurrentTime / double.Max(track.Length, 1.0));
         }
 
         protected override bool OnKeyDown(KeyDownEvent e)
@@ -89,13 +89,13 @@ namespace osu.Game.Overlays.Toolbar
             switch (e.Key)
             {
                 case Key.Up:
-                    focusForAdjustment();
-                    volume?.Adjust(GlobalAction.IncreaseVolume);
+                    expandSeekBarTemporarily();
+                    adjustSeek(1);
                     return true;
 
                 case Key.Down:
-                    focusForAdjustment();
-                    volume?.Adjust(GlobalAction.DecreaseVolume);
+                    expandSeekBarTemporarily();
+                    adjustSeek(-1);
                     return true;
             }
 
@@ -104,33 +104,40 @@ namespace osu.Game.Overlays.Toolbar
 
         protected override bool OnScroll(ScrollEvent e)
         {
-            focusForAdjustment();
-            volume?.Adjust(GlobalAction.IncreaseVolume, e.ScrollDelta.Y, e.IsPrecise);
+            expandSeekBarTemporarily();
+            adjustSeek(double.Sign(e.ScrollDelta.Y));
             return true;
         }
 
-        private void focusForAdjustment()
+        private void adjustSeek(int sign)
         {
-            volume?.FocusMasterVolume();
-            expandVolumeBarTemporarily();
+            if (blockSeek)
+                return;
+
+            var track = musicController.CurrentTrack;
+            musicController.SeekTo(double.Clamp(track.CurrentTime + (5000.0 * sign), 0.0, track.Length));
+            blockSeek = true;
+
+            // de-bouncing on it
+            Scheduler.AddDelayed(() => blockSeek = false, 33);
         }
 
         private TransformSequence<Container> expandTransform;
         private ScheduledDelegate contractTransform;
 
-        private void expandVolumeBarTemporarily()
+        private void expandSeekBarTemporarily()
         {
             // avoid starting a new transform if one is already active.
             if (expandTransform == null)
             {
-                expandTransform = volumeDisplay.ResizeWidthTo(6, 500, Easing.OutQuint);
+                expandTransform = seekDisplay.ResizeWidthTo(6, 500, Easing.OutQuint);
                 expandTransform.Finally(_ => expandTransform = null);
             }
 
             contractTransform?.Cancel();
             contractTransform = Scheduler.AddDelayed(() =>
             {
-                volumeDisplay.ResizeWidthTo(3f, 500, Easing.OutQuint);
+                seekDisplay.ResizeWidthTo(3f, 500, Easing.OutQuint);
             }, 1000);
         }
     }
